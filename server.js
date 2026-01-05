@@ -1,25 +1,36 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/*
- FINAL PERIOD FORMAT (LOCKED):
- YYYYMMDD10001XXXX
-
- RULES:
- - Game reset: 5:30 AM
- - 5:30 AM = 0001
- - Every minute +1
- - 7:59 PM example → 0870
-*/
-
 const GAME_CODE = 'WinGo_1M';
+const STATE_FILE = path.join(__dirname, 'state.json');
 
-let current = null;
-let history = [];
-let lastPeriod = null;
+// ================= STATE =================
+let state = {
+  lastPeriod: null,
+  current: null,
+  history: []
+};
 
-// ===== GAME DATE (5:30 AM RESET) =====
+// ================= LOAD STATE =================
+if (fs.existsSync(STATE_FILE)) {
+  try {
+    state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    console.log('STATE LOADED');
+  } catch (e) {
+    console.log('STATE LOAD FAILED');
+  }
+}
+
+// ================= SAVE STATE =================
+function saveState() {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+// ================= TIME HELPERS =================
 function gameDate(d) {
   const reset = new Date(d);
   reset.setHours(5, 30, 0, 0);
@@ -31,7 +42,6 @@ function gameDate(d) {
   return d;
 }
 
-// ===== PERIOD INDEX (+1 LOGIC) =====
 function periodIndex(d) {
   const g = gameDate(d);
   const base = new Date(g);
@@ -39,7 +49,6 @@ function periodIndex(d) {
   return Math.floor((d - base) / 60000) + 1;
 }
 
-// ===== BUILD PERIOD (FINAL FIX) =====
 function buildPeriod(d) {
   const g = gameDate(d);
   const yyyy = g.getFullYear();
@@ -49,20 +58,16 @@ function buildPeriod(d) {
   return `${yyyy}${mm}${dd}10001${idx}`;
 }
 
-// ===== 80% MATCH ENGINE =====
+// ================= RESULT ENGINE =================
 function decideNumber() {
-  let n;
   if (Math.random() < 0.8) {
-    n = Math.random() < 0.5
+    return Math.random() < 0.5
       ? [5, 6, 7, 8, 9][Math.floor(Math.random() * 5)]
       : [0, 1, 2, 3, 4][Math.floor(Math.random() * 5)];
-  } else {
-    n = Math.floor(Math.random() * 10);
   }
-  return n;
+  return Math.floor(Math.random() * 10);
 }
 
-// ===== META =====
 function meta(n) {
   if (n === 0) return { bs: 'SMALL', color: 'RED+VIOLET' };
   if (n === 5) return { bs: 'BIG', color: 'GREEN+VIOLET' };
@@ -72,49 +77,49 @@ function meta(n) {
   };
 }
 
-// ===== MAIN CLOCK ENGINE =====
+// ================= MAIN ENGINE =================
 setInterval(() => {
   const now = new Date();
   const sec = now.getSeconds();
   const period = buildPeriod(now);
 
-  // New period → reset current
-  if (period !== lastPeriod) {
-    current = null;
-    lastPeriod = period;
+  // new period
+  if (period !== state.lastPeriod) {
+    state.current = null;
+    state.lastPeriod = period;
+    saveState();
   }
 
-  // 20–40 sec → decide number
-  if (sec >= 20 && sec <= 40) {
-    if (!current) {
-      const n = decideNumber();
-      current = { period, n, ...meta(n) };
-    }
+  // decide number (20–40 sec)
+  if (sec >= 20 && sec <= 40 && !state.current) {
+    const n = decideNumber();
+    state.current = { period, n, ...meta(n) };
+    saveState();
   }
 
-  // 59 sec → FINAL LOCK + HISTORY ADD
-  if (sec === 59 && current) {
-    if (history.length === 0 || history[0].period !== period) {
-      history.unshift(current);
-      history = history.slice(0, 50);
+  // lock & history add (59 sec)
+  if (sec === 59 && state.current) {
+    if (state.history.length === 0 || state.history[0].period !== period) {
+      state.history.unshift(state.current);
+      state.history = state.history.slice(0, 50);
+      saveState();
     }
   }
 }, 1000);
 
-// ===== API =====
+// ================= API =================
 app.get('/api/state', (req, res) => {
-  const now = new Date();
   res.json({
     game: GAME_CODE,
-    period: buildPeriod(now),
-    current,
-    history
+    period: buildPeriod(new Date()),
+    current: state.current,
+    history: state.history
   });
 });
 
-// ===== STATIC UI =====
+// ================= STATIC =================
 app.use(express.static(__dirname));
 
 app.listen(PORT, () => {
-  console.log('POWER OF PANEL SERVER RUNNING', PORT);
+  console.log('POWER OF PANEL RUNNING');
 });
