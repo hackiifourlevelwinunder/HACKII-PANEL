@@ -2,104 +2,119 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== STATE (per gameCode) =====
-const games = {}; // { gameCode: { current, history } }
+/*
+ FINAL PERIOD FORMAT (LOCKED):
+ YYYYMMDD10001XXXX
 
-// ===== HELPERS =====
-function getGameDate(d){
-  const r = new Date(d);
-  r.setHours(5,30,0,0);
-  if(d < r){
+ RULES:
+ - Game reset: 5:30 AM
+ - 5:30 AM = 0001
+ - Every minute +1
+ - 7:59 PM example → 0870
+*/
+
+const GAME_CODE = 'WinGo_1M';
+
+let current = null;
+let history = [];
+let lastPeriod = null;
+
+// ===== GAME DATE (5:30 AM RESET) =====
+function gameDate(d) {
+  const reset = new Date(d);
+  reset.setHours(5, 30, 0, 0);
+  if (d < reset) {
     const y = new Date(d);
-    y.setDate(d.getDate()-1);
+    y.setDate(d.getDate() - 1);
     return y;
   }
   return d;
 }
-function minuteIndexSince530(d){
-  const g = getGameDate(d);
-  const b = new Date(g);
-  b.setHours(5,30,0,0);
-  return Math.max(0, Math.floor((d - b) / 60000));
+
+// ===== PERIOD INDEX (+1 LOGIC) =====
+function periodIndex(d) {
+  const g = gameDate(d);
+  const base = new Date(g);
+  base.setHours(5, 30, 0, 0);
+  return Math.floor((d - base) / 60000) + 1;
 }
-function fmt(d){
-  return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
-}
-function calcPeriod(d, gameCode){
-  const idx = minuteIndexSince530(d) + 1;
-  return `${fmt(getGameDate(d))}10001${String(idx).padStart(4,'0')}`;
+
+// ===== BUILD PERIOD (FINAL FIX) =====
+function buildPeriod(d) {
+  const g = gameDate(d);
+  const yyyy = g.getFullYear();
+  const mm = String(g.getMonth() + 1).padStart(2, '0');
+  const dd = String(g.getDate()).padStart(2, '0');
+  const idx = String(periodIndex(d)).padStart(4, '0');
+  return `${yyyy}${mm}${dd}10001${idx}`;
 }
 
 // ===== 80% MATCH ENGINE =====
-function decideNumber(d, history){
-  const seed = `${d.getHours()}${d.getMinutes()}`;
-  const base = parseInt(seed.slice(-1),10);
+function decideNumber() {
   let n;
-  if(Math.random() < 0.8){
-    const pool = base >= 5 ? [5,6,7,8,9] : [0,1,2,3,4];
-    n = pool[Math.floor(Math.random()*pool.length)];
+  if (Math.random() < 0.8) {
+    n = Math.random() < 0.5
+      ? [5, 6, 7, 8, 9][Math.floor(Math.random() * 5)]
+      : [0, 1, 2, 3, 4][Math.floor(Math.random() * 5)];
   } else {
-    n = Math.floor(Math.random()*10);
-  }
-  const last6 = history.slice(0,6).map(h=>h.n);
-  if(last6.filter(x=>x===n).length>=2 && Math.random()<0.5){
-    n = (n+1)%10;
-  }
-  if((n===0||n===5) && Math.random()>0.18){
-    n = (n+2)%10;
+    n = Math.floor(Math.random() * 10);
   }
   return n;
 }
-function meta(n){
-  if(n===0) return { bs:'SMALL', color:'RED+VIOLET' };
-  if(n===5) return { bs:'BIG', color:'GREEN+VIOLET' };
+
+// ===== META =====
+function meta(n) {
+  if (n === 0) return { bs: 'SMALL', color: 'RED+VIOLET' };
+  if (n === 5) return { bs: 'BIG', color: 'GREEN+VIOLET' };
   return {
-    bs: n>=5 ? 'BIG' : 'SMALL',
-    color: [1,3,7,9].includes(n) ? 'GREEN' : 'RED'
+    bs: n >= 5 ? 'BIG' : 'SMALL',
+    color: [1, 3, 7, 9].includes(n) ? 'GREEN' : 'RED'
   };
 }
 
-// ===== CLOCK TICK (shared) =====
-setInterval(()=>{
+// ===== MAIN CLOCK ENGINE =====
+setInterval(() => {
   const now = new Date();
   const sec = now.getSeconds();
+  const period = buildPeriod(now);
 
-  Object.keys(games).forEach(gameCode=>{
-    const game = games[gameCode];
-    const period = calcPeriod(now, gameCode);
+  // New period → reset current
+  if (period !== lastPeriod) {
+    current = null;
+    lastPeriod = period;
+  }
 
-    if(sec < 20){
-      game.current = null;
-    } else if(sec < 41){
-      if(!game.current || game.current.period !== period){
-        const n = decideNumber(now, game.history);
-        game.current = { gameCode, period, n, ...meta(n) };
-      }
-    } else if(sec >= 59){
-      if(game.current && (game.history.length===0 || game.history[0].period !== period)){
-        game.history.unshift(game.current);
-        game.history = game.history.slice(0,20);
-      }
+  // 20–40 sec → decide number
+  if (sec >= 20 && sec <= 40) {
+    if (!current) {
+      const n = decideNumber();
+      current = { period, n, ...meta(n) };
     }
-  });
+  }
+
+  // 59 sec → FINAL LOCK + HISTORY ADD
+  if (sec === 59 && current) {
+    if (history.length === 0 || history[0].period !== period) {
+      history.unshift(current);
+      history = history.slice(0, 50);
+    }
+  }
 }, 1000);
 
 // ===== API =====
-app.get('/api/state', (req,res)=>{
-  const gameCode = req.query.gameCode || 'WinGo_1M';
-  if(!games[gameCode]){
-    games[gameCode] = { current: null, history: [] };
-  }
+app.get('/api/state', (req, res) => {
   const now = new Date();
   res.json({
-    gameCode,
-    period: calcPeriod(now, gameCode),
-    upcoming: calcPeriod(new Date(now.getTime()+60000), gameCode),
-    current: games[gameCode].current,
-    history: games[gameCode].history
+    game: GAME_CODE,
+    period: buildPeriod(now),
+    current,
+    history
   });
 });
 
-// ===== STATIC =====
+// ===== STATIC UI =====
 app.use(express.static(__dirname));
-app.listen(PORT, ()=>console.log('Node server running on', PORT));
+
+app.listen(PORT, () => {
+  console.log('POWER OF PANEL SERVER RUNNING', PORT);
+});
