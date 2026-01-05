@@ -8,29 +8,35 @@ const PORT = process.env.PORT || 3000;
 const GAME_CODE = 'WinGo_1M';
 const STATE_FILE = path.join(__dirname, 'state.json');
 
-// ================= STATE =================
+/* ================= IST TIME ================= */
+function nowIST() {
+  const now = new Date();
+  return new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+}
+
+/* ================= STATE ================= */
 let state = {
   lastPeriod: null,
   current: null,
   history: []
 };
 
-// ================= LOAD STATE =================
+/* ================= LOAD STATE ================= */
 if (fs.existsSync(STATE_FILE)) {
   try {
     state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     console.log('STATE LOADED');
-  } catch (e) {
+  } catch {
     console.log('STATE LOAD FAILED');
   }
 }
 
-// ================= SAVE STATE =================
+/* ================= SAVE STATE ================= */
 function saveState() {
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-// ================= TIME HELPERS =================
+/* ================= PERIOD LOGIC ================= */
 function gameDate(d) {
   const reset = new Date(d);
   reset.setHours(5, 30, 0, 0);
@@ -58,7 +64,7 @@ function buildPeriod(d) {
   return `${yyyy}${mm}${dd}10001${idx}`;
 }
 
-// ================= RESULT ENGINE =================
+/* ================= RESULT ENGINE ================= */
 function decideNumber() {
   if (Math.random() < 0.8) {
     return Math.random() < 0.5
@@ -77,9 +83,9 @@ function meta(n) {
   };
 }
 
-// ================= MAIN ENGINE =================
+/* ================= MAIN ENGINE ================= */
 setInterval(() => {
-  const now = new Date();
+  const now = nowIST();
   const sec = now.getSeconds();
   const period = buildPeriod(now);
 
@@ -97,7 +103,7 @@ setInterval(() => {
     saveState();
   }
 
-  // lock & history add (59 sec)
+  // lock + history add (59 sec)
   if (sec === 59 && state.current) {
     if (state.history.length === 0 || state.history[0].period !== period) {
       state.history.unshift(state.current);
@@ -107,19 +113,20 @@ setInterval(() => {
   }
 }, 1000);
 
-// ================= API =================
+/* ================= API ================= */
 app.get('/api/state', (req, res) => {
+  const now = nowIST();
   res.json({
     game: GAME_CODE,
-    period: buildPeriod(new Date()),
+    period: buildPeriod(now),
     current: state.current,
     history: state.history
   });
 });
 
-// ================= STATIC =================
+/* ================= STATIC ================= */
 app.use(express.static(__dirname));
 
 app.listen(PORT, () => {
-  console.log('POWER OF PANEL RUNNING');
+  console.log('POWER OF PANEL RUNNING (FINAL)');
 });
